@@ -152,3 +152,5 @@ python -u run_d3tales.py --mode smoke --split scaffold --device cuda --output re
 根目录 `.gitignore` 已统一排除训练结果、权重、图缓存、Python 编译缓存、本机配置和凭据文件。作者的 `ReSolvedData.csv`、分子生成 notebook 与 `evo_gen/` 仅在本地保留作为参考，不进入新仓库；D3TaLES 正式数据和固定划分纳入版本控制。重复的子目录忽略文件已删除。
 
 `.gitattributes` 已配置源码使用 LF，并禁止 Git 自动转换 CSV 换行符，以保留正式数据的原始字节与哈希。已有划分文件的目录占位文件 `.gitkeep` 已清理。
+
+2026-10-04 已完成首次提交并推送至新仓库 `main` 分支，初始提交为 `36b7c90`（`Initialize D3TaLES single-target ReSolved baseline`）。共纳入 26 个文件，包含项目说明、源码、D3TaLES 原始/处理数据及 random/scaffold 划分；训练结果、模型权重与缓存未上传。
