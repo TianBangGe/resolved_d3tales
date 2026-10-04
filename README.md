@@ -105,7 +105,8 @@ Python 编译缓存已清理，包括作者仓库携带的 4 个 Python 3.11 `.p
 | `ReSolved/model/d3tales_model.py` | 单目标模型适配 |
 | `ReSolved/d3tales_data.py` | D3TaLES 图构建与开发集加载 |
 | `ReSolved/run_d3tales.py` | 默认冒烟、显式完整训练的入口 |
-| `ReSolved/test_d3tales.py` | 7 项行为测试 |
+| `ReSolved/test_d3tales.py` | 9 项行为测试 |
+| `ReSolved/run_baselines.py` | 使用当前 Python 环境顺序运行两套完整训练 |
 | `ReSolved/results_d3tales/` | 保留下来的本地验证记录 |
 | `data_redox/` | 正式任务数据与固定划分 |
 
@@ -154,3 +155,84 @@ python -u run_d3tales.py --mode smoke --split scaffold --device cuda --output re
 `.gitattributes` 已配置源码使用 LF，并禁止 Git 自动转换 CSV 换行符，以保留正式数据的原始字节与哈希。已有划分文件的目录占位文件 `.gitkeep` 已清理。
 
 2026-10-04 已完成首次提交并推送至新仓库 `main` 分支，初始提交为 `36b7c90`（`Initialize D3TaLES single-target ReSolved baseline`）。共纳入 26 个文件，包含项目说明、源码、D3TaLES 原始/处理数据及 random/scaffold 划分；训练结果、模型权重与缓存未上传。
+
+## 11. 已完成两套完整训练的顺序运行脚本
+
+2026-10-04，依据用户本次明确允许本地完整训练的要求，新增 `ReSolved/run_baselines.py`。脚本使用 `sys.executable` 调用当前已激活环境中的 Python，先运行 random，成功结束后再运行 scaffold；两套默认均为完整 Train/Validation、250 epochs、CUDA、seed 42、batch size 32、lr=1e-4、weight decay=1e-5，Test 继续封存。
+
+两套输出分别位于 `ReSolved/results_d3tales/local_full_baseline/random_seed42_250epochs/` 和 `scaffold_seed42_250epochs/`。脚本在启动前检查两套输出目录，拒绝覆盖已有结果；任一训练失败则停止后续执行。支持 `--dry-run` 打印调用命令，不创建结果或启动训练。
+
+新增的两项测试验证当前 Python 环境、两套完整训练参数和第二套目录冲突时的提前拒绝行为；全套 9 项测试通过。已实际执行 dry-run，确认生成的两条命令正确；本次脚本验证没有启动完整训练。
+
+## 12. 已完成本机两套 250 轮 baseline 训练与结果核对
+
+两套结果已从 `ReSolved/results_d3tales/local_full_baseline/` 读取并核对。random 和 scaffold 均完整记录 epoch 1–250，状态为 `complete`，每套 Train 24,081、Validation 3,010，使用相同模型、训练超参数与 seed 42；参数量为 2,461,919。配置记录 GPU 为 RTX 3050 Laptop。
+
+| Validation 最优模型 | 最佳 epoch（按 MAE） | MAE | RMSE | R² | 相对 Train-median 常数预测的 MAE 降幅 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Random | 85 | 0.480343 | 0.768081 | 0.448272 | 40.6% |
+| Scaffold | 54 | 0.524186 | 0.792096 | 0.345837 | 31.9% |
+
+各行指标均来自同一 MAE 最优 checkpoint。指标采用数据原始数值尺度，均为 Validation，Test 仍封存。这是单个训练种子的结果，不代表多次运行平均值或最终 Test 性能。
+
+核对结果：两套预测各有 3,010 个分子 ID，与各自 Validation 清单完全一致；与各自 Test 清单的 ID 交集为 0。预测文件中的目标和 SMILES 与正式处理表一致（目标允许 float32 存储的舍入误差）。从预测逐行重算 MAE、RMSE、R² 与保存指标一致；配置中的数据、划分和模型/训练代码哈希与当前文件一致。
+
+训练曲线显示过拟合：random 的第 250 轮 Train MAE=0.199722、Validation MAE=0.505312；scaffold 的第 250 轮 Train MAE=0.201033、Validation MAE=0.554938。后期训练误差继续下降，验证误差停滞或回升，最佳验证模型分别出现在第 85 和第 54 轮。当前保存的 `best_model.pth` 按最优 Validation MAE 选择，结果文件也对应该最佳模型。
+
+逐分子残差分析结果：
+
+| 最优模型 Validation 误差分布 | Random | Scaffold |
+| --- | ---: | ---: |
+| 绝对误差中位数 | 0.225998 | 0.264086 |
+| 绝对误差 P90（nearest-rank） | 1.355111 | 1.420694 |
+| 绝对误差 P95（nearest-rank） | 1.783529 | 1.731258 |
+| 最大绝对误差 | 4.660250 | 4.253811 |
+| 绝对误差大于 1 的分子数 | 491 / 3,010 | 586 / 3,010 |
+| 最大误差约 5% 样本对平方误差总和的贡献 | 46.2% | 39.9% |
+
+模型相对常数预测有明确改善，但解释的验证目标方差仍有限，且有长尾大误差样本。scaffold 的误差更高、R² 更低，与跨骨架泛化更困难相符；两套 Validation 的分布不同，不能将差异全部归因于划分方式。现有结果尚未检验描述符互补信息，不据此归因于某类描述符或标签问题。
+
+训练历史记录的累计训练与验证时间为 random 3.52 小时、scaffold 3.43 小时，不含初始构图等开销。本次检查未重新训练、未评估 Test，保留了两套最佳权重、配置、完整历史、预测和曲线作为 baseline 记录。
+
+## 13. 已完成 baseline 性能诊断
+
+新增 `ReSolved/diagnose_baseline.py`，完成既有 Validation 预测的分组残差分析、开发数据标签核对，以及 32 个 random Train 分子的拟合探针。结果保存于 `ReSolved/results_d3tales/diagnostics/diagnostics.json` 和 `train_only_fit.csv`；未修改基础模型、正式训练结果或权重，未评估 Test。
+
+小样本探针沿用原模型与 AdamW（lr=1e-4、weight decay=1e-5），固定 32 个训练分子执行 300 次更新。训练模式 MAE 从 6.860390 降至 0.053997，评估模式下同一训练子集 MAE 从 6.875039 降至 0.061384。诊断前向保存并恢复 BatchNorm 缓冲区，避免测量改变运行统计量；未保存 checkpoint。结果表明模型能够拟合该训练子集，不证明完整数据泛化良好。
+
+特征流核查确认：作者 `mpnn_model.py` 使用键类型 embedding，但数值键特征切片重复包含键类型，并跳过 `is_conjugated`。在拟合探针中翻转全部键的共轭列，预测最大变化为 0，验证该列未进入有效计算。此行为来自原作者代码；其对任务性能的影响尚未通过对照训练验证，也不能认为图结构完全不包含共轭信息。
+
+按目标原始数值尺度分组的 Validation MAE：
+
+| 目标区间 | Random 样本数 / MAE | Scaffold 样本数 / MAE |
+| --- | ---: | ---: |
+| [6, 7) | 1,222 / 0.2833 | 1,246 / 0.3004 |
+| [8, 9) | 324 / 0.9448 | 321 / 1.1300 |
+| [9, 12) | 89 / 1.6429 | 56 / 2.1946 |
+
+高目标区域明显低估，低目标区域则倾向高估，预测向中间收缩。目标 >=9 的分子仅约占各套 Train 的 3.2% / 3.4%；结合第 12 节后期过拟合，当前证据指向尾部样本与泛化问题。不能据此删除高误差样本或断定标签错误。
+
+来源分组中，Zinc 的 Validation MAE 为 0.533 / 0.554，csd 为 0.242 / 0.302（random / scaffold）；来源与目标分布、分子结构可能混杂，不能直接归因于来源噪声。SMARTS 分组未显示腈类或酰亚胺整体劣于全体样本；部分结构组样本很少，分组存在重叠。
+
+原始标签核对仅使用不属于任一 Test 的开发分子：检查的 24,413 条原始记录中，`reduction_potential` 与 `solv_reduction_potential` 数值相同。官方 [D3TaLES 计算源码](https://d3tales.github.io/d3tales_api/_modules/d3tales_api/Calculators/calculators.html) 的还原电位计算涉及能量、校正项、溶剂化贡献与参比电位，不能简单等同于 EA 加固定常数。本次未据重复字段推定导出数据的溶剂、参比或物理单位，也未更换预测目标。
+
+## 14. 已完成键共轭特征对照入口与本地冒烟
+
+在 D3TaLES 模型和训练入口增加 `--bond-features legacy|conjugation`，默认仍为 `legacy`，保留已有 baseline 的行为。`conjugation` 将数值键输入从 `[bond_type, in_ring, ring_size]` 替换为 `[is_conjugated, in_ring, ring_size]`，键类型 embedding 仍保留。原作者 `features.py`、`mpnn_model.py`、`mpnn_layer.py` 未修改，图编码、7 层消息传递、残差、Set Transformer、预测头及 2,461,919 个参数均保持原配置。
+
+`run_d3tales.py` 的 `config.json` 已记录特征模式与数值键特征名称；`run_baselines.py` 支持将同一特征模式传递给 random 和 scaffold。两种模式的权重形状相同，但输入语义不同，解释 checkpoint 时必须结合对应配置，不能将旧权重切换模式后直接当作新模式训练结果。
+
+全套 10 项测试通过。新增行为验证：旧模式翻转共轭列时预测完全一致；新模式预测会变化；新模式将共轭位置恢复为键类型数值后与旧模式预测完全一致；原始图未被修改，两模式参数量一致，新模式反向梯度有限。顺序运行脚本的 dry-run 已验证两套命令均包含 `--bond-features conjugation`，未启动完整训练。
+
+实际完成两套 CUDA 冒烟，每套 Train 128、Validation 64、1 epoch：
+
+| Conjugation 冒烟 | Validation MAE | RMSE | R² |
+| --- | ---: | ---: | ---: |
+| Random | 6.320282 | 6.374953 | -54.511676 |
+| Scaffold | 6.262499 | 6.323945 | -50.777851 |
+
+输出位于 `ReSolved/results_d3tales/conjugation_smoke_random/` 和 `conjugation_smoke_scaffold/`，均完成且 Test 封存。这些指标只用于检查小样本执行流程，不代表收敛性能；本次没有完整训练或证明精度提升，原有 250 轮 baseline 结果保留。
+
+## 15. 已补充中文注释与提交约定
+
+项目协作约定已明确 Git 提交说明使用中文，新增或修改代码添加详细中文注释。本次已为特征模式、checkpoint 输入语义、残差计算、Test 排除规则、BatchNorm 诊断状态恢复及顺序训练的目录检查补充说明。补充注释后重新执行全套 10 项测试，全部通过；差异格式检查通过。

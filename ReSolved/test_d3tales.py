@@ -3,6 +3,8 @@ import csv
 import importlib.util
 import unittest
 import uuid
+import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -24,6 +26,35 @@ def fixture_directory():
 
 
 class D3TaLESTests(unittest.TestCase):
+    def test_conjugation_ablation_uses_feature_and_preserves_legacy_predictions(self):
+        # 使用完全相同的权重隔离输入差异；恢复旧输入后要求预测逐位一致。
+        from d3tales_data import molecule_graph
+        from model.d3tales_model import D3TaLESModel
+        torch.manual_seed(42)
+        batch = Batch.from_data_list([molecule_graph("a", "CC=CC=O", 6.0)])
+        legacy = D3TaLESModel(num_layers=2, emb_dim=16).eval()
+        corrected = D3TaLESModel(num_layers=2, emb_dim=16, bond_features="conjugation").eval()
+        corrected.load_state_dict(legacy.state_dict())
+        self.assertEqual(sum(p.numel() for p in legacy.parameters()),
+                         sum(p.numel() for p in corrected.parameters()))
+        changed = batch.clone()
+        changed.edge_attr[:, 1] = 1 - changed.edge_attr[:, 1]
+        before = batch.edge_attr.clone()
+        with torch.no_grad():
+            torch.testing.assert_close(legacy(batch), legacy(changed), rtol=0, atol=0)
+            self.assertGreater((corrected(batch) - corrected(changed)).abs().max().item(), 1e-7)
+            restored = batch.clone()
+            restored.edge_attr[:, 1] = restored.edge_attr[:, 0]
+            torch.testing.assert_close(corrected(restored), legacy(batch), rtol=0, atol=0)
+        self.assertTrue(torch.equal(batch.edge_attr, before))
+        corrected.train()
+        torch.nn.functional.l1_loss(corrected(batch), batch.y).backward()
+        for name, parameter in corrected.named_parameters():
+            self.assertIsNotNone(parameter.grad, name)
+            self.assertTrue(torch.isfinite(parameter.grad).all(), name)
+        with self.assertRaises(ValueError):
+            D3TaLESModel(bond_features="unknown")
+
     def require_module(self, name):
         self.assertIsNotNone(importlib.util.find_spec(name), f"Missing D3TaLES adapter: {name}")
 
@@ -134,6 +165,32 @@ class D3TaLESTests(unittest.TestCase):
             self.assertEqual([r["dataset_id"] for r in rows], ["a", "b"])
             self.assertTrue(all("residual" in row for row in rows))
             self.assertFalse(any("test" in p.name for p in root.iterdir()))
+
+    def test_sequence_dry_run_uses_current_python_and_full_training_for_both_splits(self):
+        script = Path(__file__).parent / "run_baselines.py"
+        self.assertTrue(script.is_file(), "Missing sequential training script")
+        with fixture_directory() as root:
+            result = subprocess.run([sys.executable, str(script), "--dry-run", "--output-root", str(root),
+                                     "--bond-features", "conjugation"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(sys.executable, result.stdout)
+        self.assertIn("--split random", result.stdout)
+        self.assertIn("--split scaffold", result.stdout)
+        self.assertEqual(result.stdout.count("--mode train"), 2)
+        self.assertEqual(result.stdout.count("--epochs 250"), 2)
+        self.assertEqual(result.stdout.count("--bond-features conjugation"), 2)
+
+    def test_sequence_rejects_existing_second_output_before_starting_first(self):
+        script = Path(__file__).parent / "run_baselines.py"
+        self.assertTrue(script.is_file(), "Missing sequential training script")
+        with fixture_directory() as root:
+            # Only a file is needed: a malformed occupied output must be rejected too.
+            (root / "scaffold_seed42_250epochs").write_text("existing results", encoding="utf-8")
+            result = subprocess.run([sys.executable, str(script), "--output-root", str(root)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("already exists", result.stderr)
+            self.assertFalse((root / "random_seed42_250epochs").exists())
 
 
 if __name__ == "__main__":

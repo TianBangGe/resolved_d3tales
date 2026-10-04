@@ -146,6 +146,9 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    parser.add_argument("--bond-features", choices=["legacy", "conjugation"], default="legacy",
+                        # 默认不改变旧命令行为；只有显式选择才启用共轭特征。
+                        help="legacy: author inputs; conjugation: replace duplicated numeric bond type with conjugation")
     args = parser.parse_args()
     if args.epochs is None:
         args.epochs = 1 if args.mode == "smoke" else 250
@@ -179,6 +182,10 @@ def main():
         optimizer="AdamW", loss="MAE", lr=args.lr, weight_decay=args.weight_decay,
         num_layers=7, emb_dim=128, num_seed_points=3, heads=1,
         target_normalization="none", explicit_hydrogens=True,
+        bond_features=args.bond_features,
+        # 权重形状不能区分两种模式，必须保存输入语义供复现和加载时核查。
+        numeric_bond_features=(["bond_type", "in_ring", "ring_size"] if args.bond_features == "legacy"
+                               else ["is_conjugated", "in_ring", "ring_size"]),
         checkpoint_selection="lowest validation MAE", test_status="sealed",
         device=str(device), gpu=torch.cuda.get_device_name(device) if device.type == "cuda" else None,
         python=platform.python_version(), torch=torch.__version__,
@@ -189,7 +196,7 @@ def main():
     )
     (args.output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     (args.output / "status.json").write_text(json.dumps(dict(state="encoding", test_status="sealed")), encoding="utf-8")
-    print(f"Mode={args.mode}, split={args.split}, device={device}, Test=SEALED", flush=True)
+    print(f"Mode={args.mode}, split={args.split}, device={device}, bond_features={args.bond_features}, Test=SEALED", flush=True)
     if args.mode == "smoke":
         # Small local checks need no persistent graph cache.
         train, valid = load_development_graphs(args.data, split_path, train_limit, valid_limit)
@@ -210,7 +217,7 @@ def main():
     generator = torch.Generator().manual_seed(args.seed)
     trainloader = DataLoader(train, batch_size=args.batch_size, shuffle=True, generator=generator, num_workers=0)
     validloader = DataLoader(valid, batch_size=args.batch_size, shuffle=False, num_workers=0)
-    model = D3TaLESModel().to(device)
+    model = D3TaLESModel(bond_features=args.bond_features).to(device)
     config["parameter_count"] = sum(p.numel() for p in model.parameters())
     (args.output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     try:
