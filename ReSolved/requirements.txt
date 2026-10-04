@@ -1,0 +1,7 @@
+torch>=2.0
+torch-geometric>=2.2
+rdkit-pypi
+numpy
+pandas
+scikit-learn
+matplotlib

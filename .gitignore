@@ -1,0 +1,28 @@
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Experiment outputs and rebuildable caches
+/ReSolved/results_d3tales/
+/ReSolved/d3tales_cache/
+*.pth
+*.pt
+*.ckpt
+*.log
+
+# Local machine files and credentials
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Reference-only author data and generation notebook
+/ReSolved/ReSolvedData.csv
+/ReSolved/Evolving_EA.ipynb
+/ReSolved/evo_gen/
